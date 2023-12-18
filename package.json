@@ -33,5 +33,8 @@
   },
   "lint-staged": {
     "(!apps/docs/i18n/**/docusaurus-plugin-content-docs/current/api/*).{js,jsx,ts,tsx,md}": "prettier --write"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.1.3"
   }
 }
