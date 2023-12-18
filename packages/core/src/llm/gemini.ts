@@ -1,22 +1,45 @@
-import { LLM, ChatMessage, ChatResponse } from './LLM';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import _ from "lodash";
+import { CallbackManager, Event } from "../callbacks/CallbackManager";
+import { ChatMessage, ChatResponse, LLM } from "./LLM";
 
 export interface GeminiConfig {
   apiKey?: string;
+  model: keyof typeof ALL_AVAILABLE_GEMINI_MODELS;
+  temperature: number;
+  topP: number;
+  maxTokens?: number;
+  callbackManager?: CallbackManager;
   // add other options as needed
 }
 
-export function getGeminiConfigFromEnv(init?: Partial<GeminiConfig>): GeminiConfig {
+export function getGeminiConfigFromEnv(
+  init?: Partial<GeminiConfig>,
+): GeminiConfig {
   return {
     apiKey: init?.apiKey ?? process.env.GEMINI_API_KEY,
+    model:
+      init?.model ??
+      (process.env.GEMINI_MODEL as keyof typeof ALL_AVAILABLE_GEMINI_MODELS),
+    temperature:
+      init?.temperature ?? parseFloat(process.env.GEMINI_TEMPERATURE || "0.9"),
+    topP: init?.topP ?? parseFloat(process.env.GEMINI_TOP_P || "1"),
     // add other options as needed
   };
 }
 
-let defaultGeminiSession: { session: GeminiSession; options: ClientOptions }[] = [];
+export const ALL_AVAILABLE_GEMINI_MODELS = {
+  "gemini-pro": { contextWindow: 30720 },
+  "gemini-pro-vision": { contextWindow: 12288 },
+  "embedding-001": { contextWindow: 2048 },
+  aqa: { contextWindow: 7168 },
+};
 
-export class GeminiSession extends LLM {
+let defaultGeminiSession: { session: GeminiSession; options: ClientOptions }[] =
+  [];
+
+export class GeminiSession implements LLM {
+  hasStreaming: boolean = true;
   client: GoogleGenerativeAI;
 
   constructor(init?: Partial<GeminiConfig>) {
@@ -32,7 +55,7 @@ export class GeminiSession extends LLM {
   async chat(
     messages: ChatMessage[],
     parentEvent?: Event,
-    streaming?: boolean
+    streaming?: boolean,
   ): Promise<ChatResponse | AsyncGenerator<string, void, unknown>> {
     const baseRequestParams = {
       model: this.model,
@@ -57,18 +80,18 @@ export class GeminiSession extends LLM {
   async complete(
     prompt: string,
     parentEvent?: Event,
-    streaming?: boolean
+    streaming?: boolean,
   ): Promise<ChatResponse | AsyncGenerator<string, void, unknown>> {
     return this.chat(
       [{ content: prompt, role: "user" }],
       parentEvent,
-      streaming
+      streaming,
     );
   }
 
   async *streamChat(
     messages: ChatMessage[],
-    parentEvent?: Event
+    parentEvent?: Event,
   ): AsyncGenerator<string, void, unknown> {
     const baseRequestParams = {
       model: this.model,
@@ -89,7 +112,7 @@ export class GeminiSession extends LLM {
 
   streamComplete(
     query: string,
-    parentEvent?: Event
+    parentEvent?: Event,
   ): AsyncGenerator<string, void, unknown> {
     return this.streamChat([{ content: query, role: "user" }], parentEvent);
   }
@@ -107,10 +130,3 @@ export function getGeminiSession(init?: Partial<GeminiConfig>) {
 
   return session;
 }
-
-export const ALL_AVAILABLE_GEMINI_MODELS = {
-  "gemini-pro": { contextWindow: 30720 },
-  "gemini-pro-vision": { contextWindow: 12288 },
-  "embedding-001": { contextWindow: 2048 },
-  "aqa": { contextWindow: 7168 },
-};
