@@ -1,5 +1,112 @@
 import { LLM, ChatMessage, ChatResponse } from './LLM';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import _ from "lodash";
+
+export interface GeminiConfig {
+  apiKey?: string;
+  // add other options as needed
+}
+
+export function getGeminiConfigFromEnv(init?: Partial<GeminiConfig>): GeminiConfig {
+  return {
+    apiKey: init?.apiKey ?? process.env.GEMINI_API_KEY,
+    // add other options as needed
+  };
+}
+
+let defaultGeminiSession: { session: GeminiSession; options: ClientOptions }[] = [];
+
+export class GeminiSession extends LLM {
+  client: GoogleGenerativeAI;
+
+  constructor(init?: Partial<GeminiConfig>) {
+    const options = getGeminiConfigFromEnv(init);
+
+    if (!options.apiKey) {
+      throw new Error("Set Gemini API key in GEMINI_API_KEY env variable");
+    }
+
+    this.client = new GoogleGenerativeAI(options.apiKey);
+  }
+
+  async chat(
+    messages: ChatMessage[],
+    parentEvent?: Event,
+    streaming?: boolean
+  ): Promise<ChatResponse | AsyncGenerator<string, void, unknown>> {
+    const baseRequestParams = {
+      model: this.model,
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+      // add other parameters as needed
+    };
+
+    if (streaming) {
+      return this.streamChat(messages, parentEvent);
+    }
+
+    const response = await this.client.chat(baseRequestParams);
+    const content = response.choices[0].message?.content ?? "";
+    return {
+      message: { content, role: response.choices[0].message.role },
+    };
+  }
+
+  async complete(
+    prompt: string,
+    parentEvent?: Event,
+    streaming?: boolean
+  ): Promise<ChatResponse | AsyncGenerator<string, void, unknown>> {
+    return this.chat(
+      [{ content: prompt, role: "user" }],
+      parentEvent,
+      streaming
+    );
+  }
+
+  async *streamChat(
+    messages: ChatMessage[],
+    parentEvent?: Event
+  ): AsyncGenerator<string, void, unknown> {
+    const baseRequestParams = {
+      model: this.model,
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+      // add other parameters as needed
+      stream: true,
+    };
+
+    const chunkStream = await this.client.chat(baseRequestParams);
+
+    for await (const part of chunkStream) {
+      yield part.choices[0].message?.content ?? "";
+    }
+  }
+
+  streamComplete(
+    query: string,
+    parentEvent?: Event
+  ): AsyncGenerator<string, void, unknown> {
+    return this.streamChat([{ content: query, role: "user" }], parentEvent);
+  }
+}
+
+export function getGeminiSession(init?: Partial<GeminiConfig>) {
+  let session = defaultGeminiSession.find((session) => {
+    return _.isEqual(session.options, init);
+  })?.session;
+
+  if (!session) {
+    session = new GeminiSession(init);
+    defaultGeminiSession.push({ session, options: init });
+  }
+
+  return session;
+}
 
 export const ALL_AVAILABLE_GEMINI_MODELS = {
   "gemini-pro": { contextWindow: 30720 },
@@ -7,108 +114,3 @@ export const ALL_AVAILABLE_GEMINI_MODELS = {
   "embedding-001": { contextWindow: 2048 },
   "aqa": { contextWindow: 7168 },
 };
-
-interface GeminiConfig {
-    model_name: string;
-    temperature?: number;
-    max_tokens?: number;
-    // ... other specific Gemini configuration parameters
-}
- 
-class GeminiSession {
-    apiKey?: string;
-    private client: any;
-
-    constructor(init?: Partial<GeminiSession>) {
-        if (init?.apiKey) {
-            this.apiKey = init?.apiKey;
-        } else {
-            if (typeof process !== undefined) {
-                this.apiKey = process.env.GEMINI_API_KEY;
-            }
-        }
-        if (!this.apiKey) {
-            throw new Error("Set Gemini API key in GEMINI_API_KEY env variable");
-        }
-    }
-
-    async getClient() {
-        const { default: GeminiClient } = await import('@google/generative-ai');
-        if (!this.client) {
-            this.client = new GeminiClient(this.apiKey);
-        }
-        return this.client;
-    }
-}
-
-export class GeminiAI implements LLM {
-    hasStreaming: boolean = false;
-    model: keyof typeof ALL_AVAILABLE_GEMINI_MODELS;
-    temperature: number;
-    maxTokens?: number;
-    apiKey?: string;
-
-    private session: GeminiSession;
-
-    constructor(init?: Partial<GeminiAI>) {
-        this.model = init?.model ?? "gemini-pro";
-        this.temperature = init?.temperature ?? 0.9;
-        this.maxTokens = init?.maxTokens ?? undefined;
-        this.session = new GeminiSession(init);
-    }
-
-    get metadata() {
-        return {
-            model: this.model,
-            temperature: this.temperature,
-            maxTokens: this.maxTokens,
-            contextWindow: ALL_AVAILABLE_GEMINI_MODELS[this.model].contextWindow,
-            tokenizer: undefined,
-        };
-    }
-
-    tokens(messages: ChatMessage[]): number {
-        throw new Error("Method not implemented.");
-    }
-
-    async chat<
-        T extends boolean | undefined = undefined,
-        R = T extends true ? AsyncGenerator<string, void, unknown> : ChatResponse,
-    >(messages: ChatMessage[], parentEvent?: Event, streaming?: T): Promise<R> {
-        // Streaming
-        if (streaming) {
-            if (!this.hasStreaming) {
-                throw Error("No streaming support for this LLM.");
-            }
-            return this.streamChat(messages, parentEvent) as R;
-        }
-        // Non-streaming
-        const client = await this.session.getClient();
-        const response = await client.chat(this.buildParams(messages));
-        const message = response.choices[0].message;
-        return {
-            message,
-        } as R;
-    }
-
-    async complete<
-        T extends boolean | undefined = undefined,
-        R = T extends true ? AsyncGenerator<string, void, unknown> : ChatResponse,
-    >(prompt: string, parentEvent?: Event, streaming?: T): Promise<R> {
-        return this.chat(
-            [{ content: prompt, role: "user" }],
-            parentEvent,
-            streaming,
-        );
-    }
-
-    // ... other methods like streaming versions, embeddings, token counting, etc.
-
-    // Utility methods specific to Gemini
-
-    // ... error handling and validation
-
-    // Export metadata or other necessary information
-}
-
-export { GeminiAI };
