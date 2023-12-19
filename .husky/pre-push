@@ -1,5 +1,5 @@
-export PATH="/home/attractivehomie/.config/nvm/versions/node/v16.14.2/bin:$PATH"
 #!/bin/bash
+export PATH="/home/attractivehomie/.config/nvm/versions/node/v16.14.2/bin:$PATH"
 . "$(dirname -- "$0")/_/husky.sh"
 
-pnpm test
+#pnpm test

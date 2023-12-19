@@ -36,7 +36,10 @@ export const ALL_AVAILABLE_GEMINI_MODELS = {
   aqa: { contextWindow: 7168 },
 };
 
-let defaultGeminiSession: { session: GeminiSession }[] = [];
+let defaultGeminiSession: {
+  session: GeminiSession;
+  options?: Partial<GeminiConfig>;
+}[] = [];
 
 export class GeminiSession implements LLM {
   hasStreaming: boolean = true;
@@ -112,12 +115,13 @@ export class GeminiSession implements LLM {
       topP: this.topP,
     };
     // Streaming
-    if (streaming) {
+    /*if (streaming) {
       if (!this.hasStreaming) {
         throw Error("No streaming support for this LLM.");
       }
       return this.streamChat(messages, parentEvent) as R;
-    }
+    } 
+    */
     // Non-streaming
     const client = this.client.getGenerativeModel(modelParams);
 
@@ -139,7 +143,7 @@ export class GeminiSession implements LLM {
       streaming,
     );
   }
-
+  /*
   async *streamChat(
     messages: ChatMessage[],
     parentEvent?: Event,
@@ -167,6 +171,7 @@ export class GeminiSession implements LLM {
   ): AsyncGenerator<string, void, unknown> {
     return this.streamChat([{ content: query, role: "user" }], parentEvent);
   }
+  */
 }
 
 export function getGeminiSession(init?: Partial<GeminiConfig>) {
