@@ -1,7 +1,9 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, StartChatParams } from "@google/generative-ai";
 import _ from "lodash";
 import { CallbackManager, Event } from "../callbacks/CallbackManager";
 import { ChatMessage, ChatResponse, LLM } from "./LLM";
+
+import { Tokenizers, globalsHelper } from "../GlobalsHelper";
 
 export interface GeminiConfig {
   apiKey?: string;
@@ -10,7 +12,6 @@ export interface GeminiConfig {
   topP: number;
   maxTokens?: number;
   callbackManager?: CallbackManager;
-  // add other options as needed
 }
 
 export function getGeminiConfigFromEnv(
@@ -35,13 +36,25 @@ export const ALL_AVAILABLE_GEMINI_MODELS = {
   aqa: { contextWindow: 7168 },
 };
 
-let defaultGeminiSession: { session: GeminiSession; options: ClientOptions }[] =
-  [];
+let defaultGeminiSession: { session: GeminiSession }[] = [];
 
 export class GeminiSession implements LLM {
   hasStreaming: boolean = true;
   client: GoogleGenerativeAI;
+  model: keyof typeof ALL_AVAILABLE_GEMINI_MODELS; // Add this line
+  temperature: number;
+  topP: number;
+  maxTokens?: number;
+  apiKey?: string;
+  callbackManager?: CallbackManager;
 
+  session: GeminiSession;
+  buildParams(messages: ChatMessage[]): any {
+    return messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+  }
   constructor(init?: Partial<GeminiConfig>) {
     const options = getGeminiConfigFromEnv(init);
 
@@ -50,38 +63,76 @@ export class GeminiSession implements LLM {
     }
 
     this.client = new GoogleGenerativeAI(options.apiKey);
+    this.model = init?.model ?? "gemini-pro";
+    this.temperature = init?.temperature ?? 0.1;
+    this.topP = init?.topP ?? 1;
+    this.maxTokens = init?.maxTokens ?? undefined;
+    this.callbackManager = init?.callbackManager;
+    this.session = new GeminiSession(init);
   }
 
-  async chat(
-    messages: ChatMessage[],
-    parentEvent?: Event,
-    streaming?: boolean,
-  ): Promise<ChatResponse | AsyncGenerator<string, void, unknown>> {
-    const baseRequestParams = {
-      model: this.model,
-      messages: messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
-      // add other parameters as needed
-    };
-
-    if (streaming) {
-      return this.streamChat(messages, parentEvent);
-    }
-
-    const response = await this.client.chat(baseRequestParams);
-    const content = response.choices[0].message?.content ?? "";
+  get metadata() {
     return {
-      message: { content, role: response.choices[0].message.role },
+      model: this.model,
+      temperature: this.temperature,
+      topP: this.topP,
+      maxTokens: this.maxTokens,
+      contextWindow: ALL_AVAILABLE_GEMINI_MODELS[this.model].contextWindow,
+      tokenizer: Tokenizers.CL100K_BASE,
     };
   }
 
-  async complete(
-    prompt: string,
-    parentEvent?: Event,
-    streaming?: boolean,
-  ): Promise<ChatResponse | AsyncGenerator<string, void, unknown>> {
+  tokens(messages: ChatMessage[]): number {
+    // for latest OpenAI models, see https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb
+    const tokenizer = globalsHelper.tokenizer(this.metadata.tokenizer);
+    const tokensPerMessage = 3;
+    let numTokens = 0;
+    for (const message of messages) {
+      numTokens += tokensPerMessage;
+      for (const value of Object.values(message)) {
+        numTokens += tokenizer(value).length;
+      }
+    }
+    numTokens += 3; // every reply is primed with <|im_start|>assistant<|im_sep|>
+    return numTokens;
+  }
+
+  async chat<
+    T extends boolean | undefined = undefined,
+    R = T extends true ? AsyncGenerator<string, void, unknown> : ChatResponse,
+  >(messages: ChatMessage[], parentEvent?: Event, streaming?: T): Promise<R> {
+    const chatParams: StartChatParams = {
+      history: this.buildParams(messages),
+      // other parameters required by ModelParams
+    };
+    const modelParams: GeminiConfig = {
+      model: this.model,
+      temperature: this.temperature,
+      maxTokens: this.maxTokens,
+      topP: this.topP,
+    };
+    // Streaming
+    if (streaming) {
+      if (!this.hasStreaming) {
+        throw Error("No streaming support for this LLM.");
+      }
+      return this.streamChat(messages, parentEvent) as R;
+    }
+    // Non-streaming
+    const client = this.client.getGenerativeModel(modelParams);
+
+    const chat = client.startChat(chatParams);
+    const result = await chat.sendMessage(this.buildParams(messages));
+    const response = result.response.text ?? "";
+    return {
+      message: { response, role: response.length > 0 ? "bot" : "user" },
+    } as R;
+  }
+
+  async complete<
+    T extends boolean | undefined = undefined,
+    R = T extends true ? AsyncGenerator<string, void, unknown> : ChatResponse,
+  >(prompt: string, parentEvent?: Event, streaming?: T): Promise<R> {
     return this.chat(
       [{ content: prompt, role: "user" }],
       parentEvent,
